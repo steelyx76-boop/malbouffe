@@ -1,0 +1,46 @@
+name: Vinted NumWorks Monitor
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Relance toutes les 5 heures pour garder le workflow actif
+    - cron: '0 */5 * * *'
+  workflow_dispatch: # Permet de lancer manuellement
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # ~5h50, GitHub coupe à 6h max
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore seen items cache
+        uses: actions/cache@v4
+        with:
+          path: seen_items.json
+          key: seen-items-${{ github.run_id }}
+          restore-keys: |
+            seen-items-
+
+      - name: Run Vinted Monitor
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SEARCH_TEXT: "numworks"
+          MIN_PRICE: "20"
+          MAX_PRICE: "40"
+          CHECK_INTERVAL: "15"
+          DISCORD_MENTION: "@everyone"
+        run: |
+          timeout 20700 python3 vinted_numworks_discord.py || true
+          # timeout 20700 = 5h45min, laisse 5 min de marge avant le timeout GitHub de 6h
