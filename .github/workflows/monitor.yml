@@ -1,10 +1,10 @@
-name: Vinted NumWorks Monitor
+name: Vinted & Leboncoin NumWorks Monitor
 
 on:
   schedule:
-    # Relance automatique toutes les 5 heures pour assurer une veille continue
+    # Relance automatique toutes les 5 heures pour assurer une veille 24/7
     - cron: '0 */5 * * *'
-  workflow_dispatch: # Permet de lancer / relancer manuellement en 1 clic
+  workflow_dispatch: # Permet de lancer manuellement en 1 clic
 
 jobs:
   monitor:
@@ -26,20 +26,24 @@ jobs:
       - name: Restore seen items cache
         uses: actions/cache@v4
         with:
-          path: seen_ids.json
+          path: |
+            seen_ids.json
+            seen_lbc_ids.json
           key: seen-ids-${{ github.run_id }}
           restore-keys: |
             seen-ids-
 
-      - name: Run Vinted Real-Time Sniper
+      - name: Run Dual Sniper (Vinted + Leboncoin)
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SEARCH_TEXT: "numworks"
           MIN_PRICE: "20"
           MAX_PRICE: "40"
           POLL_INTERVAL: "3"
+          POLL_INTERVAL_LBC: "8"
           MAX_AGE_MINUTES: "10"
           DISCORD_MENTION: "@everyone"
           SEEN_FILE: "seen_ids.json"
+          SEEN_FILE_LBC: "seen_lbc_ids.json"
         run: |
-          python3 vinted_numworks_discord.py
+          python3 sniper_all.py
