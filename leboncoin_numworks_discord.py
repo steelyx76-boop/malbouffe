@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-⚡ Leboncoin Real-Time Sniper — Calculatrices NumWorks (20€ - 40€)
-- Parse directement le JSON __NEXT_DATA__ de Leboncoin via curl_cffi
-- Filtre strict : NumWorks (sans accessoires) entre 20€ et 40€
+⚡ Leboncoin Real-Time Sniper — Calculatrices NumWorks Blanches (20€ - 40€)
+- Mode de remise : LIVRAISON obligatoire (shippable=1 + vérification attributs)
+- Couleur : Blanche uniquement (exclusion des coques/housses/câbles/noir/livres)
 - Ancienneté maximale : 10 minutes (date exacte first_publication_date)
 - Alerte instantanée Discord Webhook avec lien direct
 """
@@ -25,7 +25,7 @@ WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 SEARCH_TEXT = os.getenv("SEARCH_TEXT_LBC", "numworks").strip()
 PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
 PRICE_MAX = int(os.getenv("MAX_PRICE", 40))
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_LBC", 8))  # 8-10s recommandé pour Leboncoin
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_LBC", 8))  # 8s recommandé pour Leboncoin
 MAX_AGE_MINUTES = int(os.getenv("MAX_AGE_MINUTES", 10))
 MENTION = os.getenv("DISCORD_MENTION", "@everyone").strip()
 SEEN_FILE = os.getenv("SEEN_FILE_LBC", "seen_lbc_ids.json")
@@ -57,16 +57,17 @@ def save_seen(seen: set):
 
 
 def is_valid_title(title: str) -> bool:
-    """Vérifie que l'annonce correspond bien à une calculatrice NumWorks."""
+    """Vérifie que l'annonce correspond bien à une calculatrice NumWorks blanche."""
     t = title.lower()
     has_numworks = "numworks" in t or "numwork" in t
     if not has_numworks:
         return False
 
+    # Exclusion accessoires, livres, et mention de couleur noire
     excludes = [
-        "coque seule", "housse seule", "câble seul", "chargeur seul",
-        "boite vide", "etui seul", "étui seul", "protection seule",
-        "silicone", "cable seul", "chargeur"
+        "coque", "housse", "câble", "cable", "chargeur",
+        "boite vide", "boîte vide", "etui", "étui", "protection",
+        "silicone", "noir", "noire", "livre"
     ]
     for ex in excludes:
         if ex in t:
@@ -76,17 +77,16 @@ def is_valid_title(title: str) -> bool:
 
 
 def is_fresh_date(date_str: str, max_minutes: int = 10) -> bool:
-    """Vérifie la date de publication au format 'YYYY-MM-DD HH:MM:SS'."""
+    """Vérifie si l'annonce a été publiée il y a moins de max_minutes."""
     if not date_str:
         return True
     try:
-        # Leboncoin renvoie l'heure de Paris
         pub_dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
         now = datetime.now()
         diff = now - pub_dt
         return diff.total_seconds() <= (max_minutes * 60)
     except Exception as e:
-        log.warning(f"Impossible de parser la date '{date_str}': {e}")
+        log.warning(f"Erreur parsing date '{date_str}': {e}")
         return True
 
 
@@ -96,22 +96,25 @@ def send_discord(ad: dict):
         return
 
     embed = {
-        "title": f"⚡ [Leboncoin] NumWorks détectée ({ad['price']}€) !",
+        "title": f"⚡ [Leboncoin] NumWorks Blanche détectée ({ad['price']}€) !",
         "url": ad["url"],
         "description": (
             f"**{ad['title']}**\n\n"
             f"💰 **Prix :** `{ad['price']}€`\n"
+            f"🚚 **Mode de remise :** `Livraison disponible ({ad.get('shipping_type', 'colis')})`\n"
+            f"⚪ **Couleur :** `Blanche`\n"
             f"📍 **Ville :** `{ad.get('city', 'France')}`\n"
-            f"⏱️ **Publié le :** `{ad.get('pub_date', 'Récemment')}`\n\n"
-            f"👉 **[OUVRIR SUR LEBONCOIN]({ad['url']})**"
+            f"⏱️ **Mise en ligne :** `{ad.get('pub_date', 'À l instant')}`\n\n"
+            f"👉 **[ACHETER SUR LEBONCOIN AVEC LIVRAISON]({ad['url']})**"
         ),
-        "color": 0xFF6E14,  # Orange Leboncoin
+        "color": 0xFF6E14,  # Orange officiel Leboncoin
         "fields": [
             {"name": "💰 Prix", "value": f"{ad['price']} €", "inline": True},
+            {"name": "🚚 Remise", "value": "Livraison acceptée", "inline": True},
             {"name": "📍 Ville", "value": ad.get("city", "France"), "inline": True},
             {"name": "🔗 Lien direct", "value": f"[Accéder à l'annonce]({ad['url']})", "inline": False},
         ],
-        "footer": {"text": "Leboncoin Real-time Sniper • Alerte instantanée"},
+        "footer": {"text": "Leboncoin Real-time Sniper • Livraison disponible"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -119,7 +122,7 @@ def send_discord(ad: dict):
         embed["thumbnail"] = {"url": ad["image_url"]}
 
     payload = {
-        "content": f"{MENTION} 🚨 **Calculatrice NumWorks sur Leboncoin ({ad['price']}€) !**",
+        "content": f"{MENTION} 🚨 **Calculatrice NumWorks blanche avec LIVRAISON sur Leboncoin ({ad['price']}€) !**",
         "embeds": [embed],
     }
 
@@ -134,8 +137,8 @@ def send_discord(ad: dict):
 
 
 def fetch_leboncoin_ads() -> list:
-    """Interroge la recherche Leboncoin triée par date la plus récente."""
-    url = f"https://www.leboncoin.fr/recherche?text={SEARCH_TEXT}&price={PRICE_MIN}-{PRICE_MAX}&sort=time"
+    """Interroge la recherche Leboncoin avec filtre livraison obligatoire (shippable=1) et tri récent."""
+    url = f"https://www.leboncoin.fr/recherche?text={SEARCH_TEXT}&price={PRICE_MIN}-{PRICE_MAX}&sort=time&shippable=1"
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -169,12 +172,27 @@ def fetch_leboncoin_ads() -> list:
         for ad in ads_raw:
             ad_id = str(ad.get("list_id", ""))
             subject = ad.get("subject", "")
+
+            # 1. Validation du titre (calculatrice blanche, pas d'accessoires)
             if not is_valid_title(subject):
                 continue
 
+            # 2. Validation prix
             prices = ad.get("price", [])
             price = prices[0] if prices else 0
             if not (PRICE_MIN <= price <= PRICE_MAX):
+                continue
+
+            # 3. Validation MODE DE REMISE : LIVRAISON OBLIGATOIRE
+            attrs = {att["key"]: att.get("value") for att in ad.get("attributes", [])}
+            is_shippable = (attrs.get("shippable") == "true")
+            shipping_type = attrs.get("shipping_type", "")
+            if not is_shippable or shipping_type == "face_to_face":
+                continue
+
+            # 4. Vérification que l'achat n'est pas déjà en cours ou clôturé
+            transaction_status = attrs.get("transaction_status")
+            if transaction_status in ("pending", "sold", "closed"):
                 continue
 
             pub_date = ad.get("first_publication_date") or ad.get("index_date") or ""
@@ -192,6 +210,7 @@ def fetch_leboncoin_ads() -> list:
                 "city": city,
                 "url": ad_url,
                 "image_url": img_url,
+                "shipping_type": shipping_type,
             })
 
         return items
@@ -203,20 +222,21 @@ def fetch_leboncoin_ads() -> list:
 def run_leboncoin_sniper():
     log.info("=" * 60)
     log.info("⚡ LEBONCOIN REAL-TIME SNIPER ACTIF")
-    log.info(f"🎯 Cible : NumWorks ({PRICE_MIN}€ - {PRICE_MAX}€)")
+    log.info(f"🎯 Cible : NumWorks Blanche ({PRICE_MIN}€ - {PRICE_MAX}€)")
+    log.info("🚚 Mode de remise : LIVRAISON UNIQUEMENT")
     log.info(f"⏱️ Ancienneté maximale : {MAX_AGE_MINUTES} minutes")
     log.info(f"🔄 Fréquence de scan : {POLL_INTERVAL}s")
     log.info("=" * 60)
 
     seen = load_seen()
 
-    log.info("📦 Mémorisation des annonces Leboncoin déjà en ligne...")
+    log.info("📦 Mémorisation des annonces Leboncoin existantes avec livraison...")
     initial_ads = fetch_leboncoin_ads()
     for a in initial_ads:
         seen.add(a["id"])
     save_seen(seen)
-    log.info(f"✅ {len(initial_ads)} annonces Leboncoin existantes mémorisées.")
-    log.info("👀 À l'écoute des nouvelles annonces Leboncoin...")
+    log.info(f"✅ {len(initial_ads)} annonces Leboncoin existantes avec livraison mémorisées.")
+    log.info("👀 À l'écoute des nouvelles publications Leboncoin à la seconde près...")
 
     while True:
         try:
@@ -233,10 +253,10 @@ def run_leboncoin_sniper():
 
                 # Vérifier l'ancienneté (<= 10 minutes)
                 if ad.get("pub_date") and not is_fresh_date(ad["pub_date"], MAX_AGE_MINUTES):
-                    log.info(f"⏭️ Annonce Leboncoin ignorée (trop ancienne: {ad['pub_date']})")
+                    log.info(f"⏭️ Annonce Leboncoin #{ad_id} ignorée (trop ancienne: {ad['pub_date']})")
                     continue
 
-                log.info(f"🔥 NOUVELLE NUMWORKS LEBONCOIN : {ad['title']} à {ad['price']}€ ({ad['pub_date']}) !")
+                log.info(f"🔥 NOUVELLE NUMWORKS LEBONCOIN (LIVRAISON) : {ad['title']} à {ad['price']}€ ({ad['pub_date']}) !")
                 send_discord(ad)
 
         except KeyboardInterrupt:
@@ -254,7 +274,7 @@ if __name__ == "__main__":
             sys.exit(1)
         r = cffi_requests.post(
             WEBHOOK_URL,
-            json={"content": "⚡ **Test : Le sniper Leboncoin NumWorks est connecté !**"},
+            json={"content": "⚡ **Test : Le sniper Leboncoin NumWorks (Livraison uniquement) est connecté !**"},
             timeout=10
         )
         print("Test Discord Leboncoin:", r.status_code)
