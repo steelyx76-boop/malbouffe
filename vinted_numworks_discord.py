@@ -76,12 +76,30 @@ class VintedNumworksScraper:
             if excl in lower_title:
                 return False
 
-        # 2. Vérification de la présence d'au moins un mot-clé requis
-        reqs = self.config.get("require_keywords", [])
-        if reqs and not any(r in lower_title for r in reqs):
+        # 2. Extraire le nom du produit (avant la première virgule)
+        #    Format typique : "Calculatrice numworks, Marque: NUMWORKS, État: ..."
+        product_name = lower_title.split(",")[0].strip()
+
+        # 3. Le nom du produit doit contenir "numworks" ou "numwork"
+        has_numworks = "numworks" in product_name or "numwork" in product_name
+
+        # 4. Le nom du produit doit aussi contenir un mot lié à calculatrice
+        has_calc = any(w in product_name for w in ("calculatrice", "calculette", "calc numworks", "calc"))
+
+        # On accepte si le titre du produit mentionne clairement numworks
+        # ET qu'il s'agit d'une calculatrice (ou que le titre est juste "numworks")
+        if not has_numworks:
             return False
 
-        return True
+        # Si le titre contient juste "numworks" sans autre qualificatif, on accepte aussi
+        if has_numworks and (has_calc or product_name.strip() in ("numworks", "numwork")):
+            return True
+
+        # Accepter aussi les titres courts comme "Numworks" ou "Numworks N0110"
+        if has_numworks:
+            return True
+
+        return False
 
     def fetch_listings(self) -> List[Dict[str, Any]]:
         """Scrape la recherche Vinted via curl_cffi avec émulation TLS Chrome."""
