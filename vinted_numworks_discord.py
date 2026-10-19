@@ -140,12 +140,21 @@ def is_fresh(upload_str: str, max_minutes: int = 10) -> bool:
     return False
 
 
-def is_white(color_str: str) -> bool:
-    """Vérifie si la couleur indiquée comprend le blanc."""
+def is_strictly_white(color_str: str) -> bool:
+    """
+    Vérifie que la couleur est STRICTEMENT blanche.
+    Rejette les combinaisons de couleurs (ex: 'Blanc, Noir', 'Blanc / Noir').
+    """
     if not color_str:
-        return True  # Le filtre Vinted color_ids[]=12 applique déjà la couleur
-    c = color_str.lower()
-    return "blanc" in c or "white" in c
+        return True  # Si non renseigné sur la fiche mais trouvé via color_ids[]=12
+
+    c = color_str.strip().lower()
+
+    # Rejeter explicitement s'il y a du noir ou toute autre couleur combinée
+    if any(sep in c for sep in (",", "/", " et ", "-", "+", "&")):
+        return False
+
+    return c in ("blanc", "white")
 
 
 # ─── Envoi Discord instantané ────────────────────────────────────
@@ -305,9 +314,9 @@ def run_sniper():
                 log.info(f"🔎 Nouvelle détection #{item_id}: {it['title']} ({it['price']}) — vérification ancienneté...")
                 color, upload_time = parse_item_details(it["url"])
 
-                # Vérifier la couleur
-                if color and not is_white(color):
-                    log.info(f"⏭️ Ignoré (couleur non blanche: '{color}')")
+                # Vérifier la couleur STRICTEMENT blanche
+                if color and not is_strictly_white(color):
+                    log.info(f"⏭️ Ignoré (couleur non strictement blanche: '{color}')")
                     continue
 
                 # Vérifier l'ancienneté (< 10 minutes)
