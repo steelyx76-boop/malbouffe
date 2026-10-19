@@ -24,7 +24,7 @@ load_dotenv()
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 SEARCH_TEXT = os.getenv("SEARCH_TEXT", "numworks").strip()
 PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
-PRICE_MAX = int(os.getenv("MAX_PRICE", 40))
+PRICE_MAX = int(os.getenv("MAX_PRICE", 35))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 2))  # Rafraîchissement ultra-rapide
 MAX_AGE_MINUTES = int(os.getenv("MAX_AGE_MINUTES", 10))  # Max 10 minutes
 MENTION = os.getenv("DISCORD_MENTION", "@everyone").strip()

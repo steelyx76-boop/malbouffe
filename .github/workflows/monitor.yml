@@ -38,7 +38,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SEARCH_TEXT: "numworks"
           MIN_PRICE: "20"
-          MAX_PRICE: "40"
+          MAX_PRICE: "35"
           POLL_INTERVAL: "3"
           POLL_INTERVAL_LBC: "8"
           MAX_AGE_MINUTES: "10"
