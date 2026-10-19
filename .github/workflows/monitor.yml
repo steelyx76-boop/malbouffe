@@ -1,8 +1,6 @@
 name: Vinted NumWorks Monitor
 
 on:
-  push:
-    branches: [main]
   schedule:
     # Relance toutes les 5 heures pour garder le workflow actif
     - cron: '0 */5 * * *'
