@@ -1,3 +1,4 @@
+vinted-scraper>=5.0
 curl_cffi
 beautifulsoup4
 python-dotenv

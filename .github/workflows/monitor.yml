@@ -2,14 +2,14 @@ name: Vinted NumWorks Monitor
 
 on:
   schedule:
-    # Relance toutes les 5 heures pour garder le workflow actif
+    # Relance automatique toutes les 5 heures pour assurer une veille continue
     - cron: '0 */5 * * *'
-  workflow_dispatch: # Permet de lancer manuellement
+  workflow_dispatch: # Permet de lancer / relancer manuellement en 1 clic
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # ~5h50, GitHub coupe à 6h max
+    timeout-minutes: 350  # ~5h50 max par exécution (limite GitHub Actions: 6h)
 
     steps:
       - name: Checkout repository
@@ -26,19 +26,20 @@ jobs:
       - name: Restore seen items cache
         uses: actions/cache@v4
         with:
-          path: seen_items.json
-          key: seen-items-${{ github.run_id }}
+          path: seen_ids.json
+          key: seen-ids-${{ github.run_id }}
           restore-keys: |
-            seen-items-
+            seen-ids-
 
-      - name: Run Vinted Monitor
+      - name: Run Vinted Real-Time Sniper
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SEARCH_TEXT: "numworks"
           MIN_PRICE: "20"
           MAX_PRICE: "40"
-          CHECK_INTERVAL: "15"
+          POLL_INTERVAL: "3"
+          MAX_AGE_MINUTES: "10"
           DISCORD_MENTION: "@everyone"
+          SEEN_FILE: "seen_ids.json"
         run: |
-          timeout 20700 python3 vinted_numworks_discord.py || true
-          # timeout 20700 = 5h45min, laisse 5 min de marge avant le timeout GitHub de 6h
+          python3 vinted_numworks_discord.py

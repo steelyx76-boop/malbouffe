@@ -1,288 +1,343 @@
 #!/usr/bin/env python3
 """
-Vinted Sniper & Discord Alert Bot - NumWorks (20€ - 40€)
-Bypasses Cloudflare using Chrome TLS impersonation (curl_cffi).
+⚡ Vinted Ultra-Fast Sniper — Calculatrices NumWorks Blanches (20€–40€)
+- Détection ultra-rapide (poll toutes les 2-3s)
+- Filtre strict : NumWorks Blanche uniquement (color_ids[]=12 + vérification couleur)
+- Ancienneté maximale : 10 minutes (filtre les annonces anciennes)
+- Tourne 100% sur GitHub Actions (pas besoin de laisser son ordi allumé)
 """
 
 import os
-import re
 import sys
 import time
 import json
 import logging
-from typing import List, Dict, Any, Optional
+import re
+from datetime import datetime, timezone
 from bs4 import BeautifulSoup
-from curl_cffi import requests
+from curl_cffi import requests as cffi_requests
 from dotenv import load_dotenv
 
-# Charger les variables depuis le fichier .env
 load_dotenv()
 
-# Configuration
-CONFIG = {
-    "discord_webhook_url": os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
-    "search_text": os.getenv("SEARCH_TEXT", "numworks").strip(),
-    "price_from": float(os.getenv("MIN_PRICE", 20)),
-    "price_to": float(os.getenv("MAX_PRICE", 40)),
-    "check_interval": int(os.getenv("CHECK_INTERVAL", 15)),
-    "mention": os.getenv("DISCORD_MENTION", "@everyone").strip(),
-    "proxy_url": os.getenv("PROXY_URL", "").strip(),
-    "seen_items_file": os.getenv("SEEN_ITEMS_FILE", "seen_items.json").strip(),
-    # Mots-clés requis (au moins un doit être présent)
-    "require_keywords": [k.strip().lower() for k in os.getenv("REQUIRE_KEYWORDS", "calculatrice,numworks,numwork").split(",") if k.strip()],
-    # Mots-clés exclus (évite les fausses alertes comme les coques ou câbles seuls)
-    "exclude_keywords": [k.strip().lower() for k in os.getenv("EXCLUDE_KEYWORDS", "coque seule,housse seule,boite vide,câble seul,chargeur seul").split(",") if k.strip()],
-}
+# ─── Configuration ───────────────────────────────────────────────
+WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+SEARCH_TEXT = os.getenv("SEARCH_TEXT", "numworks").strip()
+PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
+PRICE_MAX = int(os.getenv("MAX_PRICE", 40))
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 2))  # Rafraîchissement ultra-rapide
+MAX_AGE_MINUTES = int(os.getenv("MAX_AGE_MINUTES", 10))  # Max 10 minutes
+MENTION = os.getenv("DISCORD_MENTION", "@everyone").strip()
+SEEN_FILE = os.getenv("SEEN_FILE", "seen_ids.json")
+PROXY_URL = os.getenv("PROXY_URL", "").strip()
+PROXIES = {"all": PROXY_URL} if PROXY_URL else None
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("VintedNumworks")
+log = logging.getLogger("sniper")
 
-class VintedNumworksScraper:
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.seen_file = config.get("seen_items_file", "seen_items.json")
-        self.seen_items = self._load_seen_items()
-        self.webhook_url = config.get("discord_webhook_url", "")
-        self.proxy_url = config.get("proxy_url", "")
-        self.proxies = {"all": self.proxy_url} if self.proxy_url else None
 
-    def _load_seen_items(self) -> set:
-        if os.path.exists(self.seen_file):
-            try:
-                with open(self.seen_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    return set(data)
-            except Exception as e:
-                logger.warning(f"Impossible de charger {self.seen_file}: {e}")
-        return set()
-
-    def _save_seen_items(self):
+# ─── Persistance des annonces déjà traitées ───────────────────────
+def load_seen() -> set:
+    if os.path.exists(SEEN_FILE):
         try:
-            with open(self.seen_file, "w", encoding="utf-8") as f:
-                json.dump(list(self.seen_items), f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"Erreur d'écriture dans {self.seen_file}: {e}")
+            with open(SEEN_FILE, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
 
-    def is_valid_item(self, title: str) -> bool:
-        """Vérifie si le titre correspond aux critères d'inclusion et d'exclusion."""
-        lower_title = title.lower()
 
-        # 1. Exclusion de faux positifs (ex: coque vendue seule)
-        for excl in self.config.get("exclude_keywords", []):
-            if excl in lower_title:
-                return False
+def save_seen(seen: set):
+    trimmed = sorted(seen, reverse=True)[:3000]
+    with open(SEEN_FILE, "w") as f:
+        json.dump(trimmed, f)
 
-        # 2. Extraire le nom du produit (avant la première virgule)
-        #    Format typique : "Calculatrice numworks, Marque: NUMWORKS, État: ..."
-        product_name = lower_title.split(",")[0].strip()
 
-        # 3. Le nom du produit doit contenir "numworks" ou "numwork"
-        has_numworks = "numworks" in product_name or "numwork" in product_name
+# ─── Filtrage du titre et exclusion accessoires ──────────────────
+def is_valid_title(title: str) -> bool:
+    """Vérifie que le titre correspond bien à une calculatrice NumWorks."""
+    t = title.lower()
+    name = t.split(",")[0].strip()
 
-        # 4. Le nom du produit doit aussi contenir un mot lié à calculatrice
-        has_calc = any(w in product_name for w in ("calculatrice", "calculette", "calc numworks", "calc"))
-
-        # On accepte si le titre du produit mentionne clairement numworks
-        # ET qu'il s'agit d'une calculatrice (ou que le titre est juste "numworks")
-        if not has_numworks:
-            return False
-
-        # Si le titre contient juste "numworks" sans autre qualificatif, on accepte aussi
-        if has_numworks and (has_calc or product_name.strip() in ("numworks", "numwork")):
-            return True
-
-        # Accepter aussi les titres courts comme "Numworks" ou "Numworks N0110"
-        if has_numworks:
-            return True
-
+    has_numworks = "numworks" in name or "numwork" in name
+    if not has_numworks:
         return False
 
-    def fetch_listings(self) -> List[Dict[str, Any]]:
-        """Scrape la recherche Vinted via curl_cffi avec émulation TLS Chrome."""
-        url = (
-            f"https://www.vinted.fr/catalog?"
-            f"search_text={self.config['search_text']}&"
-            f"price_from={int(self.config['price_from'])}&"
-            f"price_to={int(self.config['price_to'])}&"
-            f"order=newest_first"
+    excludes = [
+        "coque seule", "housse seule", "câble seul", "chargeur seul",
+        "boite vide", "etui seul", "étui seul", "protection seule",
+        "silicone", "cable seul"
+    ]
+    for ex in excludes:
+        if ex in t:
+            return False
+
+    return True
+
+
+# ─── Vérification de l'ancienneté et de la couleur ──────────────
+def parse_item_details(item_url: str):
+    """
+    Récupère la page de l'article pour vérifier :
+    1. La date de mise en ligne exacte ('Ajouté -> Il y a X minutes')
+    2. La couleur ('Couleur -> Blanc')
+    """
+    try:
+        r = cffi_requests.get(
+            item_url,
+            impersonate="chrome124",
+            proxies=PROXIES,
+            timeout=10
         )
+        if r.status_code != 200:
+            return None, None
 
-        headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer": "https://www.vinted.fr/",
-        }
+        soup = BeautifulSoup(r.text, "html.parser")
+        color = None
+        upload_time = None
 
-        try:
-            res = requests.get(
-                url,
-                headers=headers,
-                impersonate="chrome124",
-                proxies=self.proxies,
-                timeout=15
-            )
+        for tag in soup.find_all(lambda t: t.name in ("div", "span") and t.string in ("Couleur", "Ajouté")):
+            parent_text = tag.parent.get_text(separator=" | ", strip=True)
+            parts = [p.strip() for p in parent_text.split("|")]
+            if len(parts) >= 2:
+                if parts[0] == "Couleur":
+                    color = parts[1]
+                elif parts[0] == "Ajouté":
+                    upload_time = parts[1]
 
-            if res.status_code != 200:
-                logger.error(f"Réponse HTTP anormale de Vinted: {res.status_code}")
-                return []
+        return color, upload_time
+    except Exception as e:
+        log.warning(f"Impossible de récupérer les détails de {item_url}: {e}")
+        return None, None
 
-            soup = BeautifulSoup(res.text, "html.parser")
-            cards = soup.find_all("div", attrs={"data-testid": re.compile(r"^product-item-id-\d+$")})
 
-            items = []
-            for card in cards:
-                item_id = card.get("data-testid", "").replace("product-item-id-", "").strip()
-                if not item_id:
-                    continue
+def is_fresh(upload_str: str, max_minutes: int = 10) -> bool:
+    """Vérifie si l'annonce a été postée il y a moins de max_minutes."""
+    if not upload_str:
+        # Si non détecté sur un nouvel ID, on considère comme frais pour ne pas rater d'alerte
+        return True
 
-                overlay = card.find("a", attrs={"data-testid": re.compile(r"--overlay-link$")})
-                title_attr = overlay.get("title", "") if overlay else ""
-                href = overlay.get("href", "") if overlay else ""
+    u = upload_str.lower()
 
-                if not self.is_valid_item(title_attr):
-                    continue
+    # Moins d'une minute
+    if any(k in u for k in ("seconde", "l'instant", "maintenant", "à l instant")):
+        return True
 
-                img = card.find("img", attrs={"data-testid": re.compile(r"--image--img$")})
-                img_url = img.get("src", "") if img else ""
+    # Détection des minutes ("Il y a 3 minutes")
+    m = re.search(r"(\d+)\s*min", u)
+    if m:
+        minutes = int(m.group(1))
+        return minutes <= max_minutes
 
-                full_url = f"https://www.vinted.fr{href}" if href.startswith("/") else href
+    if "une minute" in u:
+        return True
 
-                # Récupération du prix (ex: "25.00 €")
-                price_match = re.search(r"(\d+[\.,]\d{2})\s*€", title_attr)
-                price_str = price_match.group(0) if price_match else "Prix non détecté"
+    # Tout le reste ("il y a une heure", "il y a 2 heures", "il y a un jour", etc.) est refusé
+    return False
 
-                # Récupération de l'état (ex: "Très bon état", "Neuf avec étiquette")
-                state_match = re.search(r"État:\s*([^,]+)", title_attr)
-                state_str = state_match.group(1).strip() if state_match else "Non spécifié"
 
-                # Nom nettoyé
-                clean_title = title_attr.split(",")[0].strip() if title_attr else "Calculatrice NumWorks"
+def is_white(color_str: str) -> bool:
+    """Vérifie si la couleur indiquée comprend le blanc."""
+    if not color_str:
+        return True  # Le filtre Vinted color_ids[]=12 applique déjà la couleur
+    c = color_str.lower()
+    return "blanc" in c or "white" in c
 
-                items.append({
-                    "id": item_id,
-                    "title": clean_title,
-                    "full_info": title_attr,
-                    "url": full_url,
-                    "image_url": img_url,
-                    "price": price_str,
-                    "condition": state_str,
-                })
 
-            return items
+# ─── Envoi Discord instantané ────────────────────────────────────
+def send_discord(item_data: dict):
+    if not WEBHOOK_URL:
+        log.info(f"[SIMULATION] {item_data['title']} — {item_data['price']} -> {item_data['url']}")
+        return
 
-        except Exception as e:
-            logger.error(f"Erreur de scraping Vinted: {e}")
+    embed = {
+        "title": f"⚡ NumWorks Blanche détectée ({item_data['price']}) !",
+        "url": item_data["url"],
+        "description": (
+            f"**{item_data['title']}**\n\n"
+            f"💰 **Prix :** `{item_data['price']}`\n"
+            f"⚪ **Couleur :** `{item_data['color']}`\n"
+            f"📦 **État :** `{item_data['condition']}`\n"
+            f"⏱️ **Mise en ligne :** `{item_data['upload_time']}`\n\n"
+            f"👉 **[ACHETER DIRECTEMENT SUR VINTED]({item_data['url']})**"
+        ),
+        "color": 0x00FF88,  # Vert néon instantané
+        "fields": [
+            {"name": "💰 Montant", "value": item_data["price"], "inline": True},
+            {"name": "⏱️ Ancienneté", "value": item_data["upload_time"], "inline": True},
+            {"name": "🔗 Lien direct", "value": f"[Lien de l'annonce]({item_data['url']})", "inline": False},
+        ],
+        "footer": {"text": "Vinted Real-time Sniper • Alerte instantanée"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if item_data.get("image_url"):
+        embed["thumbnail"] = {"url": item_data["image_url"]}
+
+    payload = {
+        "content": f"{MENTION} 🚨 **Calculatrice NumWorks blanche vient d'être mise en ligne ({item_data['price']}) !**",
+        "embeds": [embed],
+    }
+
+    try:
+        r = cffi_requests.post(WEBHOOK_URL, json=payload, timeout=10)
+        if r.status_code in (200, 204):
+            log.info(f"✅ ALERTE ENVOYÉE sur Discord pour #{item_data['id']} ({item_data['price']}) !")
+        else:
+            log.error(f"❌ Discord échec: {r.status_code} - {r.text[:200]}")
+    except Exception as e:
+        log.error(f"❌ Erreur envoi Webhook: {e}")
+
+
+# ─── Scraping du flux Vinted ─────────────────────────────────────
+def fetch_catalog_items() -> list:
+    """Interroge le catalogue Vinted avec filtre couleur blanche + prix 20-40€."""
+    url = (
+        f"https://www.vinted.fr/catalog?"
+        f"search_text={SEARCH_TEXT}&"
+        f"price_from={PRICE_MIN}&"
+        f"price_to={PRICE_MAX}&"
+        f"order=newest_first&"
+        f"color_ids[]=12"  # ID 12 = Blanc
+    )
+
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.vinted.fr/",
+    }
+
+    try:
+        res = cffi_requests.get(
+            url,
+            headers=headers,
+            impersonate="chrome124",
+            proxies=PROXIES,
+            timeout=10
+        )
+        if res.status_code != 200:
+            log.warning(f"Vinted status {res.status_code}")
             return []
 
-    def send_discord_alert(self, item: Dict[str, Any]):
-        """Envoie une alerte riche sur Discord via Webhook."""
-        if not self.webhook_url:
-            logger.info(f"🔔 [SIMULATION SANS WEBHOOK] Nouvelle Numworks: {item['title']} ({item['price']}) -> {item['url']}")
-            return
+        soup = BeautifulSoup(res.text, "html.parser")
+        cards = soup.find_all("div", attrs={"data-testid": re.compile(r"^product-item-id-\d+$")})
 
-        embed = {
-            "title": f"⚡ Nouvelle NumWorks en ligne : {item['price']} !",
-            "url": item["url"],
-            "description": f"**Titre :** {item['title']}\n**État :** {item['condition']}\n**Prix :** {item['price']}",
-            "color": 0x09B1BA,  # Cyan signature Vinted
-            "fields": [
-                {"name": "💰 Montant", "value": f"`{item['price']}`", "inline": True},
-                {"name": "📦 Condition", "value": f"`{item['condition']}`", "inline": True},
-                {"name": "🚀 Achat immédiat", "value": f"[Ouvrir sur Vinted]({item['url']})", "inline": False},
-            ],
-            "footer": {
-                "text": "Antigravity Vinted Sniper • Alerte instantanée"
-            },
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        }
+        items = []
+        for card in cards:
+            item_id = card.get("data-testid", "").replace("product-item-id-", "").strip()
+            if not item_id:
+                continue
 
-        if item.get("image_url"):
-            embed["image"] = {"url": item["image_url"]}
+            overlay = card.find("a", attrs={"data-testid": re.compile(r"--overlay-link$")})
+            title_attr = overlay.get("title", "") if overlay else ""
+            href = overlay.get("href", "") if overlay else ""
 
-        content_msg = f"{self.config.get('mention', '')} 🚨 **Calculatrice NumWorks disponible entre {int(self.config['price_from'])}€ et {int(self.config['price_to'])}€ !**".strip()
+            if not is_valid_title(title_attr):
+                continue
 
-        payload = {
-            "content": content_msg,
-            "embeds": [embed]
-        }
+            img = card.find("img", attrs={"data-testid": re.compile(r"--image--img$")})
+            img_url = img.get("src", "") if img else ""
 
+            full_url = f"https://www.vinted.fr{href}" if href.startswith("/") else href
+
+            price_match = re.search(r"(\d+[\.,]\d{2})\s*€", title_attr)
+            price_str = price_match.group(0) if price_match else "Prix non détecté"
+
+            state_match = re.search(r"État:\s*([^,]+)", title_attr)
+            state_str = state_match.group(1).strip() if state_match else "Non spécifié"
+
+            clean_title = title_attr.split(",")[0].strip() if title_attr else "Calculatrice NumWorks"
+
+            items.append({
+                "id": item_id,
+                "title": clean_title,
+                "full_title": title_attr,
+                "url": full_url,
+                "image_url": img_url,
+                "price": price_str,
+                "condition": state_str,
+            })
+
+        return items
+    except Exception as e:
+        log.error(f"Erreur scraping catalog: {e}")
+        return []
+
+
+# ─── Surveillance en temps réel ──────────────────────────────────
+def run_sniper():
+    log.info("=" * 60)
+    log.info("⚡ VINTED REAL-TIME SNIPER ACTIF")
+    log.info(f"🎯 Cible : NumWorks Blanche (20€ - 40€)")
+    log.info(f"⏱️ Ancienneté maximale : {MAX_AGE_MINUTES} minutes")
+    log.info(f"🔄 Fréquence de scan : {POLL_INTERVAL}s")
+    log.info("=" * 60)
+
+    seen = load_seen()
+
+    # 1. Mémorisation de l'existant au premier scan
+    log.info("📦 Mémorisation des annonces actuellement en ligne...")
+    initial_items = fetch_catalog_items()
+    for it in initial_items:
+        seen.add(it["id"])
+    save_seen(seen)
+    log.info(f"✅ {len(initial_items)} annonces déjà en ligne mémorisées (aucune alerte pour l'ancien).")
+    log.info("👀 À l'écoute des publications à la seconde près...")
+
+    while True:
         try:
-            r = requests.post(self.webhook_url, json=payload, timeout=10)
-            if r.status_code in (200, 204):
-                logger.info(f"✅ Notification Discord envoyée pour l'annonce #{item['id']} ({item['price']})")
-            else:
-                logger.error(f"❌ Échec envoi Discord (HTTP {r.status_code}): {r.text}")
+            time.sleep(POLL_INTERVAL)
+            current_items = fetch_catalog_items()
+
+            for it in reversed(current_items):
+                item_id = it["id"]
+                if item_id in seen:
+                    continue
+
+                seen.add(item_id)
+                save_seen(seen)
+
+                # Vérification approfondie (couleur blanche + ancienneté < 10 mins)
+                log.info(f"🔎 Nouvelle détection #{item_id}: {it['title']} ({it['price']}) — vérification ancienneté...")
+                color, upload_time = parse_item_details(it["url"])
+
+                # Vérifier la couleur
+                if color and not is_white(color):
+                    log.info(f"⏭️ Ignoré (couleur non blanche: '{color}')")
+                    continue
+
+                # Vérifier l'ancienneté (< 10 minutes)
+                if upload_time and not is_fresh(upload_time, MAX_AGE_MINUTES):
+                    log.info(f"⏭️ Ignoré (trop ancien: '{upload_time}')")
+                    continue
+
+                # ALERTE VALIDÉE
+                it["color"] = color or "Blanc"
+                it["upload_time"] = upload_time or "À l'instant"
+                log.info(f"🔥 NOUVELLE NUMWORKS VALIDE : {it['title']} à {it['price']} ({it['upload_time']}) !")
+                send_discord(it)
+
+        except KeyboardInterrupt:
+            log.info("Arrêt du sniper.")
+            break
         except Exception as e:
-            logger.error(f"❌ Exception envoi Webhook: {e}")
+            log.error(f"Erreur boucle: {e}")
+            time.sleep(3)
 
-    def test_discord_webhook(self):
-        """Envoie un message test sur Discord pour vérifier le Webhook."""
-        if not self.webhook_url:
-            logger.error("Veuillez renseigner DISCORD_WEBHOOK_URL dans votre fichier .env")
-            return False
-
-        payload = {
-            "content": "✅ **Test de connexion réussi !** Le bot d'alerte NumWorks Vinted est prêt à envoyer des alertes."
-        }
-        try:
-            r = requests.post(self.webhook_url, json=payload, timeout=10)
-            if r.status_code in (200, 204):
-                logger.info("Message test Discord envoyé avec succès !")
-                return True
-            else:
-                logger.error(f"Échec test Discord (HTTP {r.status_code}): {r.text}")
-                return False
-        except Exception as e:
-            logger.error(f"Erreur test Discord: {e}")
-            return False
-
-    def start(self):
-        """Démarre la boucle de surveillance en temps réel."""
-        interval = self.config.get("check_interval", 15)
-        logger.info("=" * 60)
-        logger.info(f"🎯 Surveillance Vinted lancée pour : '{self.config['search_text']}'")
-        logger.info(f"💶 Plage de prix : {self.config['price_from']}€ - {self.config['price_to']}€")
-        logger.info(f"⏱️ Intervalle de vérification : {interval} secondes")
-        if self.webhook_url:
-            logger.info("🔗 Discord Webhook configuré.")
-        else:
-            logger.warning("⚠️ Aucun DISCORD_WEBHOOK_URL configuré (mode simulation dans la console).")
-        logger.info("=" * 60)
-
-        # Première passe : mémoriser l'existant sans spammer Discord
-        logger.info("📦 Mémorisation des annonces actuellement en ligne...")
-        initial_items = self.fetch_listings()
-        for it in initial_items:
-            self.seen_items.add(it["id"])
-        self._save_seen_items()
-        logger.info(f"✅ {len(initial_items)} annonces existantes mémorisées. En écoute des nouvelles publications...")
-
-        # Boucle d'alerte
-        while True:
-            try:
-                time.sleep(interval)
-                current_items = self.fetch_listings()
-                for it in reversed(current_items):
-                    if it["id"] not in self.seen_items:
-                        logger.info(f"🔥 NOUVELLE ANNONCE DÉTECTÉE : {it['title']} à {it['price']} !")
-                        self.seen_items.add(it["id"])
-                        self._save_seen_items()
-                        self.send_discord_alert(it)
-            except KeyboardInterrupt:
-                logger.info("Arrêt de la surveillance.")
-                break
-            except Exception as e:
-                logger.error(f"Erreur dans la boucle: {e}")
-                time.sleep(5)
 
 if __name__ == "__main__":
-    scraper = VintedNumworksScraper(CONFIG)
-
     if "--test" in sys.argv:
-        scraper.test_discord_webhook()
+        if not WEBHOOK_URL:
+            print("❌ DISCORD_WEBHOOK_URL non défini")
+            sys.exit(1)
+        payload = {
+            "content": "⚡ **Test Discord Webhook : Le sniper Vinted Numworks Blanche est prêt !**"
+        }
+        r = cffi_requests.post(WEBHOOK_URL, json=payload, timeout=10)
+        print("Status test:", r.status_code)
     else:
-        scraper.start()
+        run_sniper()
