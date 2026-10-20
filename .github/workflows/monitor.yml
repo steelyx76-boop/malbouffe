@@ -63,6 +63,9 @@ jobs:
       - name: Run Vinted Sniper Worker
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
           SEARCH_TEXT: "numworks"
           MIN_PRICE: "20"
           MAX_PRICE: "40"

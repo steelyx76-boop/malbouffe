@@ -45,6 +45,48 @@ logging.basicConfig(
 log = logging.getLogger("sniper")
 
 
+# ─── Verrou distribué anti-doublon multi-workers ─────────────────
+def claim_alert_lock(item_id: str) -> bool:
+    """
+    Verrou distribué atomique multi-workers basé sur les Git Refs de GitHub.
+    - Renvoie True si ce worker est le premier du cluster à verrouiller l'annonce.
+    - Renvoie False si un autre worker l'a déjà envoyée sur Discord (doublon bloqué).
+    """
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    repo = os.getenv("GITHUB_REPOSITORY", "").strip()
+    sha = os.getenv("GITHUB_SHA", "").strip()
+    if not token or not repo or not sha:
+        # En local ou sans configuration GitHub, envoi direct
+        return True
+
+    url = f"https://api.github.com/repos/{repo}/git/refs"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Vinted-Sniper-Bot",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "ref": f"refs/tags/alert-{item_id}",
+        "sha": sha,
+    }
+    try:
+        r = cffi_requests.post(url, json=payload, headers=headers, timeout=4)
+        if r.status_code == 201:
+            log.info(f"🔒 [LOCK VALIDÉ] Worker #{WORKER_ID} a pris l'exclusivité d'envoi sur #{item_id} !")
+            return True
+        elif r.status_code == 422:
+            log.info(f"⏭️ [DOUBLON BLOQUÉ] L'annonce #{item_id} a déjà été alertée par un autre worker.")
+            return False
+        else:
+            log.warning(f"GitHub lock status {r.status_code} - envoi autorisé par sécurité")
+            return True
+    except Exception as e:
+        log.warning(f"Erreur vérification lock: {e}")
+        return True
+
+
 # ─── Persistance des annonces déjà traitées ───────────────────────
 def load_seen() -> set:
     if os.path.exists(SEEN_FILE):
@@ -344,10 +386,11 @@ def run_sniper():
         if it["id"] not in seen:
             color, upload_time = parse_item_details(it["url"], session=session)
             if upload_time and is_fresh(upload_time, MAX_AGE_MINUTES) and (not color or is_strictly_white(color)):
-                log.info(f"🔥 NOUVELLE NUMWORKS VALIDE AU DÉMARRAGE : {it['title']} à {it['price']} ({upload_time}) !")
-                it["color"] = color or "Blanc"
-                it["upload_time"] = upload_time
-                send_discord(it)
+                if claim_alert_lock(it["id"]):
+                    log.info(f"🔥 NOUVELLE NUMWORKS VALIDE AU DÉMARRAGE : {it['title']} à {it['price']} ({upload_time}) !")
+                    it["color"] = color or "Blanc"
+                    it["upload_time"] = upload_time
+                    send_discord(it)
         seen.add(it["id"])
     save_seen(seen)
     log.info(f"✅ {len(initial_items)} annonces déjà en ligne mémorisées (aucune alerte pour l'ancien).")
@@ -412,6 +455,10 @@ def run_sniper():
                 # Vérifier l'ancienneté (< 10 minutes)
                 if upload_time and not is_fresh(upload_time, MAX_AGE_MINUTES):
                     log.info(f"⏭️ Ignoré (trop ancien: '{upload_time}')")
+                    continue
+
+                # Verrou atomique multi-workers : seul le 1er worker qui valide envoie l'alerte sur Discord
+                if not claim_alert_lock(item_id):
                     continue
 
                 # ALERTE VALIDÉE
