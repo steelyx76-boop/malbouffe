@@ -319,6 +319,7 @@ def run_sniper():
     seen = load_seen()
     start_time = time.time()
     last_status_ping = time.time()
+    scan_count = 0
 
     # 1. Mémorisation de l'existant au premier scan
     log.info("📦 Mémorisation des annonces actuellement en ligne...")
@@ -343,6 +344,7 @@ def run_sniper():
                 break
 
             time.sleep(POLL_INTERVAL)
+            scan_count += 1
 
             # Rapport d'activité automatique toutes les 30 minutes (1800s)
             if (time.time() - last_status_ping) >= 1800:
@@ -353,6 +355,12 @@ def run_sniper():
                 last_status_ping = time.time()
 
             current_items = fetch_catalog_items(session=session)
+
+            # Log interne régulier (toutes les ~1 minute = 30 scans)
+            if scan_count % 30 == 0:
+                log.info(
+                    f"🛰️ [LOG INTERNE] Scan #{scan_count} OK (HTTP 200) | {len(current_items)} annonce(s) en ligne | 0 erreur | En écoute..."
+                )
 
             for it in reversed(current_items):
                 item_id = it["id"]
