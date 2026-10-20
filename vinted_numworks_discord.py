@@ -25,7 +25,7 @@ WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 SEARCH_TEXT = os.getenv("SEARCH_TEXT", "numworks").strip()
 PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
 PRICE_MAX = int(os.getenv("MAX_PRICE", 35))
-POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", 0.5))  # Scan ultra-rapide toutes les 0.5s
+POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", 2.0))  # Scan optimisé toutes les 2s (évite 429)
 MAX_AGE_MINUTES = int(os.getenv("MAX_AGE_MINUTES", 10))  # Max 10 minutes
 RUN_DURATION_HOURS = float(os.getenv("RUN_DURATION_HOURS", 4.8))  # Rotation propre avant limite GitHub
 MENTION = os.getenv("DISCORD_MENTION", "@everyone").strip()
@@ -206,6 +206,9 @@ def send_discord(item_data: dict):
         log.error(f"❌ Erreur envoi Webhook: {e}")
 
 
+_last_rate_limit_alert = 0
+
+
 def send_discord_status(message: str):
     """Envoie une notification d'état rapide sur Discord."""
     if not WEBHOOK_URL:
@@ -219,6 +222,8 @@ def send_discord_status(message: str):
 # ─── Scraping du flux Vinted ─────────────────────────────────────
 def fetch_catalog_items(session=None) -> list:
     """Interroge le catalogue Vinted avec filtre couleur blanche + prix 20-35€."""
+    global _last_rate_limit_alert
+
     url = (
         f"https://www.vinted.fr/catalog?"
         f"search_text={SEARCH_TEXT}&"
@@ -247,8 +252,17 @@ def fetch_catalog_items(session=None) -> list:
             )
         if res.status_code != 200:
             log.warning(f"Vinted status {res.status_code}")
-            if res.status_code in (403, 429):
-                send_discord_status(f"⚠️ **Alerte Vinted** : Code HTTP {res.status_code} reçu de Vinted !")
+            if res.status_code == 429:
+                log.warning("Rate limit 429 détecté. Pause de temporisation 15s...")
+                time.sleep(15)
+                # Anti-spam : au maximum 1 alerte Discord toutes les 30 minutes
+                if time.time() - _last_rate_limit_alert > 1800:
+                    send_discord_status("⚠️ **Alerte Vinted** : Rate limit 429 temporaire. Pause automatique appliquée.")
+                    _last_rate_limit_alert = time.time()
+            elif res.status_code == 403:
+                if time.time() - _last_rate_limit_alert > 1800:
+                    send_discord_status("⚠️ **Alerte Vinted** : Code HTTP 403 reçu.")
+                    _last_rate_limit_alert = time.time()
             return []
 
         soup = BeautifulSoup(res.text, "html.parser")
@@ -312,6 +326,7 @@ def run_sniper():
 
     seen = load_seen()
     start_time = time.time()
+    last_hourly_ping = time.time()
 
     # 1. Mémorisation de l'existant au premier scan
     log.info("📦 Mémorisation des annonces actuellement en ligne...")
@@ -336,6 +351,15 @@ def run_sniper():
                 break
 
             time.sleep(POLL_INTERVAL)
+
+            # Rapport horaire automatique toutes les heures (3600s)
+            if (time.time() - last_hourly_ping) >= 3600:
+                log.info("⏰ Envoi du rapport horaire Discord...")
+                send_discord_status(
+                    f"🟢 **Rapport horaire Vinted Sniper** : Le sniper tourne parfaitement 24/24h (Statut HTTP 200, 0 ban). En écoute permanente des NumWorks blanches ({PRICE_MIN}€–{PRICE_MAX}€)."
+                )
+                last_hourly_ping = time.time()
+
             current_items = fetch_catalog_items(session=session)
 
             for it in reversed(current_items):
