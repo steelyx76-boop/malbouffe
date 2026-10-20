@@ -23,6 +23,7 @@ load_dotenv()
 
 # ─── Configuration ───────────────────────────────────────────────
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "numworks").strip()
 SEARCH_TEXT = os.getenv("SEARCH_TEXT", "numworks").strip()
 PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
 PRICE_MAX = int(os.getenv("MAX_PRICE", 40))
@@ -258,6 +259,52 @@ def send_discord(item_data: dict):
     t.start()
 
 
+# ─── Envoi ntfy.sh instantané (Téléphone - Priorité Maximale) ─────
+def _send_ntfy_worker(item_data: dict):
+    if not NTFY_TOPIC:
+        return
+
+    payload = {
+        "topic": NTFY_TOPIC,
+        "title": f"⚡ NumWorks Blanche à {item_data.get('price', '')} !",
+        "message": (
+            f"{item_data.get('title', 'NumWorks')} | {item_data.get('condition', 'Bon état')}\n"
+            f"👉 Touche ici pour ouvrir DIRECTEMENT dans Vinted !"
+        ),
+        "priority": 5,  # Priorité max (réveille l'écran et sonne sur iOS/Android)
+        "tags": ["zap", "moneybag"],
+        "click": item_data.get("url", ""),
+        "actions": [
+            {
+                "action": "view",
+                "label": "Ouvrir dans Vinted",
+                "url": item_data.get("url", ""),
+            }
+        ],
+    }
+
+    try:
+        r = cffi_requests.post("https://ntfy.sh", json=payload, timeout=6)
+        if r.status_code == 200:
+            log.info(f"📱 ALERTE NTFY ENVOYÉE sur le smartphone pour #{item_data['id']} !")
+        else:
+            log.warning(f"ntfy status: {r.status_code} - {r.text[:100]}")
+    except Exception as e:
+        log.error(f"❌ Erreur envoi ntfy: {e}")
+
+
+def send_ntfy(item_data: dict):
+    """Envoi non-bloquant sur ntfy.sh en tâche de fond."""
+    t = threading.Thread(target=_send_ntfy_worker, args=(item_data,), daemon=True)
+    t.start()
+
+
+def notify_all(item_data: dict):
+    """Déclenche les alertes en parallèle (Discord + Téléphone ntfy direct)."""
+    send_discord(item_data)
+    send_ntfy(item_data)
+
+
 _last_rate_limit_alert = 0
 
 
@@ -390,7 +437,7 @@ def run_sniper():
                     log.info(f"🔥 NOUVELLE NUMWORKS VALIDE AU DÉMARRAGE : {it['title']} à {it['price']} ({upload_time}) !")
                     it["color"] = color or "Blanc"
                     it["upload_time"] = upload_time
-                    send_discord(it)
+                    notify_all(it)
         seen.add(it["id"])
     save_seen(seen)
     log.info(f"✅ {len(initial_items)} annonces déjà en ligne mémorisées (aucune alerte pour l'ancien).")
@@ -465,7 +512,7 @@ def run_sniper():
                 it["color"] = color or "Blanc"
                 it["upload_time"] = upload_time or "À l'instant"
                 log.info(f"🔥 NOUVELLE NUMWORKS VALIDE : {it['title']} à {it['price']} ({it['upload_time']}) !")
-                send_discord(it)
+                notify_all(it)
 
         except KeyboardInterrupt:
             log.info("Arrêt du sniper.")
