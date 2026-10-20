@@ -27,6 +27,7 @@ PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
 PRICE_MAX = int(os.getenv("MAX_PRICE", 35))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 2))  # Rafraîchissement ultra-rapide
 MAX_AGE_MINUTES = int(os.getenv("MAX_AGE_MINUTES", 10))  # Max 10 minutes
+RUN_DURATION_HOURS = float(os.getenv("RUN_DURATION_HOURS", 4.8))  # Rotation propre avant limite GitHub
 MENTION = os.getenv("DISCORD_MENTION", "@everyone").strip()
 SEEN_FILE = os.getenv("SEEN_FILE", "seen_ids.json")
 PROXY_URL = os.getenv("PROXY_URL", "").strip()
@@ -280,13 +281,15 @@ def fetch_catalog_items() -> list:
 # ─── Surveillance en temps réel ──────────────────────────────────
 def run_sniper():
     log.info("=" * 60)
-    log.info("⚡ VINTED REAL-TIME SNIPER ACTIF")
-    log.info(f"🎯 Cible : NumWorks Blanche (20€ - 40€)")
+    log.info("⚡ VINTED REAL-TIME SNIPER ACTIF (100% PUISSANCE)")
+    log.info(f"🎯 Cible : NumWorks Blanche ({PRICE_MIN}€ - {PRICE_MAX}€)")
     log.info(f"⏱️ Ancienneté maximale : {MAX_AGE_MINUTES} minutes")
     log.info(f"🔄 Fréquence de scan : {POLL_INTERVAL}s")
+    log.info(f"⏳ Durée max de cette session : {RUN_DURATION_HOURS}h (auto-rotation infinie)")
     log.info("=" * 60)
 
     seen = load_seen()
+    start_time = time.time()
 
     # 1. Mémorisation de l'existant au premier scan
     log.info("📦 Mémorisation des annonces actuellement en ligne...")
@@ -299,6 +302,12 @@ def run_sniper():
 
     while True:
         try:
+            # Vérifier si on a atteint la durée max pour rotation propre
+            if (time.time() - start_time) >= (RUN_DURATION_HOURS * 3600):
+                log.info(f"🔄 Rotation normale atteinte ({RUN_DURATION_HOURS}h). Sauvegarde et passage au run suivant...")
+                save_seen(seen)
+                break
+
             time.sleep(POLL_INTERVAL)
             current_items = fetch_catalog_items()
 

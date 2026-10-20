@@ -1,15 +1,24 @@
-name: Vinted & Leboncoin NumWorks Monitor
+name: Vinted Real-Time Sniper (Infinite 24/7)
 
 on:
   schedule:
-    # Relance automatique toutes les 5 heures pour assurer une veille 24/7
-    - cron: '0 */5 * * *'
-  workflow_dispatch: # Permet de lancer manuellement en 1 clic
+    # Filet de sécurité cron toutes les 4 heures
+    - cron: '0 */4 * * *'
+  workflow_dispatch: # Déclencheur manuel
+
+# Empêche strictement d'avoir plusieurs workflows qui tournent en même temps
+concurrency:
+  group: vinted-sniper-single
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: write
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # ~5h50 max par exécution (limite GitHub Actions: 6h)
+    timeout-minutes: 320 # ~5h15 max par session avant auto-relais
 
     steps:
       - name: Checkout repository
@@ -26,24 +35,29 @@ jobs:
       - name: Restore seen items cache
         uses: actions/cache@v4
         with:
-          path: |
-            seen_ids.json
-            seen_lbc_ids.json
+          path: seen_ids.json
           key: seen-ids-${{ github.run_id }}
           restore-keys: |
             seen-ids-
 
-      - name: Run Dual Sniper (Vinted + Leboncoin)
+      - name: Run Vinted Sniper (100% Puissance Vinted)
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SEARCH_TEXT: "numworks"
           MIN_PRICE: "20"
           MAX_PRICE: "35"
-          POLL_INTERVAL: "3"
-          POLL_INTERVAL_LBC: "8"
+          POLL_INTERVAL: "2"
           MAX_AGE_MINUTES: "10"
+          RUN_DURATION_HOURS: "4.8"
           DISCORD_MENTION: "@everyone"
           SEEN_FILE: "seen_ids.json"
-          SEEN_FILE_LBC: "seen_lbc_ids.json"
         run: |
-          python3 sniper_all.py
+          python3 vinted_numworks_discord.py
+
+      - name: Auto-relay to next run (Infinite 24/7 loop)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔄 Relance automatique du prochain run pour continuité 24h/24 7j/7..."
+          gh workflow run monitor.yml --repo ${{ github.repository }}
