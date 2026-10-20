@@ -25,7 +25,7 @@ WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 SEARCH_TEXT = os.getenv("SEARCH_TEXT", "numworks").strip()
 PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
 PRICE_MAX = int(os.getenv("MAX_PRICE", 35))
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 1))  # Scan toutes les 1 seconde (ultra-rapide)
+POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", 0.5))  # Scan ultra-rapide toutes les 0.5s
 MAX_AGE_MINUTES = int(os.getenv("MAX_AGE_MINUTES", 10))  # Max 10 minutes
 RUN_DURATION_HOURS = float(os.getenv("RUN_DURATION_HOURS", 4.8))  # Rotation propre avant limite GitHub
 MENTION = os.getenv("DISCORD_MENTION", "@everyone").strip()
@@ -81,19 +81,22 @@ def is_valid_title(title: str) -> bool:
 
 
 # ─── Vérification de l'ancienneté et de la couleur ──────────────
-def parse_item_details(item_url: str):
+def parse_item_details(item_url: str, session=None):
     """
     Récupère la page de l'article pour vérifier :
     1. La date de mise en ligne exacte ('Ajouté -> Il y a X minutes')
     2. La couleur ('Couleur -> Blanc')
     """
     try:
-        r = cffi_requests.get(
-            item_url,
-            impersonate="chrome124",
-            proxies=PROXIES,
-            timeout=10
-        )
+        if session is not None:
+            r = session.get(item_url, timeout=6)
+        else:
+            r = cffi_requests.get(
+                item_url,
+                impersonate="chrome124",
+                proxies=PROXIES,
+                timeout=6
+            )
         if r.status_code != 200:
             return None, None
 
@@ -214,7 +217,7 @@ def send_discord_status(message: str):
 
 
 # ─── Scraping du flux Vinted ─────────────────────────────────────
-def fetch_catalog_items() -> list:
+def fetch_catalog_items(session=None) -> list:
     """Interroge le catalogue Vinted avec filtre couleur blanche + prix 20-35€."""
     url = (
         f"https://www.vinted.fr/catalog?"
@@ -232,13 +235,16 @@ def fetch_catalog_items() -> list:
     }
 
     try:
-        res = cffi_requests.get(
-            url,
-            headers=headers,
-            impersonate="chrome124",
-            proxies=PROXIES,
-            timeout=10
-        )
+        if session is not None:
+            res = session.get(url, headers=headers, timeout=8)
+        else:
+            res = cffi_requests.get(
+                url,
+                headers=headers,
+                impersonate="chrome124",
+                proxies=PROXIES,
+                timeout=8
+            )
         if res.status_code != 200:
             log.warning(f"Vinted status {res.status_code}")
             if res.status_code in (403, 429):
@@ -293,28 +299,32 @@ def fetch_catalog_items() -> list:
 # ─── Surveillance en temps réel ──────────────────────────────────
 def run_sniper():
     log.info("=" * 60)
-    log.info("⚡ VINTED REAL-TIME SNIPER ACTIF (100% PUISSANCE)")
+    log.info("⚡ VINTED REAL-TIME SNIPER ACTIF (TURBO SPEED)")
     log.info(f"🎯 Cible : NumWorks Blanche ({PRICE_MIN}€ - {PRICE_MAX}€)")
     log.info(f"⏱️ Ancienneté maximale : {MAX_AGE_MINUTES} minutes")
-    log.info(f"🔄 Fréquence de scan : {POLL_INTERVAL}s")
+    log.info(f"🔄 Fréquence de scan : {POLL_INTERVAL}s (HTTP/2 persistent session)")
     log.info(f"⏳ Durée max de cette session : {RUN_DURATION_HOURS}h (auto-rotation infinie)")
     log.info("=" * 60)
+
+    session = cffi_requests.Session(impersonate="chrome124")
+    if PROXIES:
+        session.proxies = PROXIES
 
     seen = load_seen()
     start_time = time.time()
 
     # 1. Mémorisation de l'existant au premier scan
     log.info("📦 Mémorisation des annonces actuellement en ligne...")
-    initial_items = fetch_catalog_items()
+    initial_items = fetch_catalog_items(session=session)
     for it in initial_items:
         seen.add(it["id"])
     save_seen(seen)
     log.info(f"✅ {len(initial_items)} annonces déjà en ligne mémorisées (aucune alerte pour l'ancien).")
-    log.info("👀 À l'écoute des publications à la seconde près...")
+    log.info(f"👀 À l'écoute des publications toutes les {POLL_INTERVAL}s...")
 
     # Confirmation en direct sur Discord
     send_discord_status(
-        f"🟢 **Vinted Sniper en ligne (Scan 1s)** : Statut Vinted OK (HTTP 200), 0 ban. En écoute continue des NumWorks blanches ({PRICE_MIN}€–{PRICE_MAX}€) !"
+        f"🟢 **Vinted Turbo Sniper en ligne ({POLL_INTERVAL}s)** : Session HTTP/2 active, HTTP 200. Écoute continue des NumWorks blanches ({PRICE_MIN}€–{PRICE_MAX}€) !"
     )
 
     while True:
@@ -326,7 +336,7 @@ def run_sniper():
                 break
 
             time.sleep(POLL_INTERVAL)
-            current_items = fetch_catalog_items()
+            current_items = fetch_catalog_items(session=session)
 
             for it in reversed(current_items):
                 item_id = it["id"]
@@ -338,7 +348,7 @@ def run_sniper():
 
                 # Vérification approfondie (couleur blanche + ancienneté < 10 mins)
                 log.info(f"🔎 Nouvelle détection #{item_id}: {it['title']} ({it['price']}) — vérification ancienneté...")
-                color, upload_time = parse_item_details(it["url"])
+                color, upload_time = parse_item_details(it["url"], session=session)
 
                 # Vérifier la couleur STRICTEMENT blanche
                 if color and not is_strictly_white(color):
