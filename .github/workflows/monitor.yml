@@ -26,9 +26,15 @@ jobs:
           - worker_id: 1
             offset: 0.0
           - worker_id: 2
-            offset: 0.65
+            offset: 0.30
           - worker_id: 3
-            offset: 1.30
+            offset: 0.60
+          - worker_id: 4
+            offset: 0.90
+          - worker_id: 5
+            offset: 1.20
+          - worker_id: 6
+            offset: 1.50
 
     steps:
       - name: Checkout repository
@@ -56,13 +62,13 @@ jobs:
           SEARCH_TEXT: "numworks"
           MIN_PRICE: "20"
           MAX_PRICE: "40"
-          POLL_INTERVAL: "2.0"
+          POLL_INTERVAL: "1.8"
           MAX_AGE_MINUTES: "10"
           RUN_DURATION_HOURS: "4.8"
           DISCORD_MENTION: "@everyone"
           SEEN_FILE: "seen_ids.json"
           WORKER_ID: ${{ matrix.worker_id }}
-          WORKER_COUNT: "3"
+          WORKER_COUNT: "6"
           START_OFFSET: ${{ matrix.offset }}
         run: |
           python3 vinted_numworks_discord.py
