@@ -19,6 +19,16 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 320 # ~5h15 max par session avant auto-relais
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - worker_id: 1
+            offset: 0.0
+          - worker_id: 2
+            offset: 0.65
+          - worker_id: 3
+            offset: 1.30
 
     steps:
       - name: Checkout repository
@@ -36,11 +46,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: seen_ids.json
-          key: seen-ids-${{ github.run_id }}
+          key: seen-ids-${{ github.run_id }}-${{ matrix.worker_id }}
           restore-keys: |
             seen-ids-
 
-      - name: Run Vinted Sniper (100% Puissance Vinted)
+      - name: Run Vinted Sniper Worker
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SEARCH_TEXT: "numworks"
@@ -51,11 +61,14 @@ jobs:
           RUN_DURATION_HOURS: "4.8"
           DISCORD_MENTION: "@everyone"
           SEEN_FILE: "seen_ids.json"
+          WORKER_ID: ${{ matrix.worker_id }}
+          WORKER_COUNT: "3"
+          START_OFFSET: ${{ matrix.offset }}
         run: |
           python3 vinted_numworks_discord.py
 
       - name: Auto-relay to next run (Infinite 24/7 loop)
-        if: always()
+        if: always() && matrix.worker_id == 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

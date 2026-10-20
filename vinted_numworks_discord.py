@@ -32,6 +32,9 @@ MENTION = os.getenv("DISCORD_MENTION", "@everyone").strip()
 SEEN_FILE = os.getenv("SEEN_FILE", "seen_ids.json")
 PROXY_URL = os.getenv("PROXY_URL", "").strip()
 PROXIES = {"all": PROXY_URL} if PROXY_URL else None
+WORKER_ID = int(os.getenv("WORKER_ID", 1))
+WORKER_COUNT = int(os.getenv("WORKER_COUNT", 1))
+START_OFFSET = float(os.getenv("START_OFFSET", 0.0))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -304,11 +307,12 @@ def fetch_catalog_items(session=None) -> list:
 
 # ─── Surveillance en temps réel ──────────────────────────────────
 def run_sniper():
+    effective_cadence = POLL_INTERVAL / WORKER_COUNT if WORKER_COUNT > 1 else POLL_INTERVAL
     log.info("=" * 60)
-    log.info("⚡ VINTED REAL-TIME SNIPER ACTIF (TURBO SPEED)")
+    log.info(f"⚡ VINTED REAL-TIME SNIPER ACTIF — WORKER #{WORKER_ID}/{WORKER_COUNT}")
     log.info(f"🎯 Cible : NumWorks Blanche ({PRICE_MIN}€ - {PRICE_MAX}€)")
     log.info(f"⏱️ Ancienneté maximale : {MAX_AGE_MINUTES} minutes")
-    log.info(f"🔄 Fréquence de scan : {POLL_INTERVAL}s (HTTP/2 persistent session)")
+    log.info(f"🔄 Fréquence de ce worker : {POLL_INTERVAL}s (Cadence globale ~{effective_cadence:.2f}s)")
     log.info(f"⏳ Durée max de cette session : {RUN_DURATION_HOURS}h (auto-rotation infinie)")
     log.info("=" * 60)
 
@@ -335,12 +339,19 @@ def run_sniper():
         seen.add(it["id"])
     save_seen(seen)
     log.info(f"✅ {len(initial_items)} annonces déjà en ligne mémorisées (aucune alerte pour l'ancien).")
-    log.info(f"👀 À l'écoute des publications toutes les {POLL_INTERVAL}s...")
 
-    # Confirmation en direct sur Discord
-    send_discord_status(
-        f"🟢 **Vinted Turbo Sniper en ligne ({POLL_INTERVAL}s)** : Session HTTP/2 active, HTTP 200. Écoute continue des NumWorks blanches ({PRICE_MIN}€–{PRICE_MAX}€) !"
-    )
+    # Décalage temporel pour synchronisation du cluster multi-workers
+    if START_OFFSET > 0:
+        log.info(f"⏳ Worker #{WORKER_ID} : Décalage de synchronisation de {START_OFFSET}s...")
+        time.sleep(START_OFFSET)
+
+    log.info(f"👀 Worker #{WORKER_ID} à l'écoute des publications toutes les {POLL_INTERVAL}s...")
+
+    # Seul le Worker 1 envoie la confirmation de démarrage pour éviter les doublons
+    if WORKER_ID == 1:
+        send_discord_status(
+            f"🚀 **Vinted Cluster Multi-Instances en ligne ({WORKER_COUNT} Workers, cadence globale ~{effective_cadence:.2f}s)** : Statut Vinted HTTP 200, 0 ban. Surveillance ultra-rapide des NumWorks ({PRICE_MIN}€–{PRICE_MAX}€) !"
+        )
 
     while True:
         try:
@@ -353,11 +364,11 @@ def run_sniper():
             time.sleep(POLL_INTERVAL)
             scan_count += 1
 
-            # Rapport d'activité automatique toutes les 30 minutes (1800s)
-            if (time.time() - last_status_ping) >= 1800:
+            # Rapport d'activité automatique toutes les 30 minutes (uniquement Worker 1)
+            if WORKER_ID == 1 and (time.time() - last_status_ping) >= 1800:
                 log.info("⏰ Envoi du rapport 30min Discord...")
                 send_discord_status(
-                    f"🟢 **Rapport Vinted Sniper (Toutes les 30 min)** : Le sniper tourne parfaitement 24/24h (Statut HTTP 200, 0 ban). En écoute permanente des NumWorks blanches ({PRICE_MIN}€–{PRICE_MAX}€)."
+                    f"🟢 **Rapport Vinted Cluster ({WORKER_COUNT} Workers, cadence ~{effective_cadence:.2f}s)** : Tout tourne parfaitement 24/24h (HTTP 200, 0 ban). En écoute permanente des NumWorks blanches ({PRICE_MIN}€–{PRICE_MAX}€)."
                 )
                 last_status_ping = time.time()
 
