@@ -253,16 +253,8 @@ def fetch_catalog_items(session=None) -> list:
         if res.status_code != 200:
             log.warning(f"Vinted status {res.status_code}")
             if res.status_code == 429:
-                log.warning("Rate limit 429 détecté. Pause de temporisation 15s...")
-                time.sleep(15)
-                # Anti-spam : au maximum 1 alerte Discord toutes les 30 minutes
-                if time.time() - _last_rate_limit_alert > 1800:
-                    send_discord_status("⚠️ **Alerte Vinted** : Rate limit 429 temporaire. Pause automatique appliquée.")
-                    _last_rate_limit_alert = time.time()
-            elif res.status_code == 403:
-                if time.time() - _last_rate_limit_alert > 1800:
-                    send_discord_status("⚠️ **Alerte Vinted** : Code HTTP 403 reçu.")
-                    _last_rate_limit_alert = time.time()
+                log.warning("Rate limit 429 détecté. Pause silencieuse de 20s pour temporisation...")
+                time.sleep(20)
             return []
 
         soup = BeautifulSoup(res.text, "html.parser")
@@ -326,7 +318,7 @@ def run_sniper():
 
     seen = load_seen()
     start_time = time.time()
-    last_hourly_ping = time.time()
+    last_status_ping = time.time()
 
     # 1. Mémorisation de l'existant au premier scan
     log.info("📦 Mémorisation des annonces actuellement en ligne...")
@@ -352,13 +344,13 @@ def run_sniper():
 
             time.sleep(POLL_INTERVAL)
 
-            # Rapport horaire automatique toutes les heures (3600s)
-            if (time.time() - last_hourly_ping) >= 3600:
-                log.info("⏰ Envoi du rapport horaire Discord...")
+            # Rapport d'activité automatique toutes les 30 minutes (1800s)
+            if (time.time() - last_status_ping) >= 1800:
+                log.info("⏰ Envoi du rapport 30min Discord...")
                 send_discord_status(
-                    f"🟢 **Rapport horaire Vinted Sniper** : Le sniper tourne parfaitement 24/24h (Statut HTTP 200, 0 ban). En écoute permanente des NumWorks blanches ({PRICE_MIN}€–{PRICE_MAX}€)."
+                    f"🟢 **Rapport Vinted Sniper (Toutes les 30 min)** : Le sniper tourne parfaitement 24/24h (Statut HTTP 200, 0 ban). En écoute permanente des NumWorks blanches ({PRICE_MIN}€–{PRICE_MAX}€)."
                 )
-                last_hourly_ping = time.time()
+                last_status_ping = time.time()
 
             current_items = fetch_catalog_items(session=session)
 
