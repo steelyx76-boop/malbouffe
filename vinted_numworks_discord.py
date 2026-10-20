@@ -215,14 +215,13 @@ def send_discord_status(message: str):
 
 # ─── Scraping du flux Vinted ─────────────────────────────────────
 def fetch_catalog_items() -> list:
-    """Interroge le catalogue Vinted avec filtre couleur blanche + prix 20-35€."""
+    """Interroge le catalogue Vinted pour les NumWorks entre 20€ et 35€."""
     url = (
         f"https://www.vinted.fr/catalog?"
         f"search_text={SEARCH_TEXT}&"
         f"price_from={PRICE_MIN}&"
         f"price_to={PRICE_MAX}&"
-        f"order=newest_first&"
-        f"color_ids[]=12"  # ID 12 = Blanc
+        f"order=newest_first"
     )
 
     headers = {
@@ -336,22 +335,16 @@ def run_sniper():
                 seen.add(item_id)
                 save_seen(seen)
 
-                # Vérification approfondie (couleur blanche + ancienneté < 10 mins)
+                # Vérification de l'ancienneté (< 10 minutes)
                 log.info(f"🔎 Nouvelle détection #{item_id}: {it['title']} ({it['price']}) — vérification ancienneté...")
                 color, upload_time = parse_item_details(it["url"])
 
-                # Vérifier la couleur STRICTEMENT blanche
-                if color and not is_strictly_white(color):
-                    log.info(f"⏭️ Ignoré (couleur non strictement blanche: '{color}')")
-                    continue
-
-                # Vérifier l'ancienneté (< 10 minutes)
                 if upload_time and not is_fresh(upload_time, MAX_AGE_MINUTES):
                     log.info(f"⏭️ Ignoré (trop ancien: '{upload_time}')")
                     continue
 
                 # ALERTE VALIDÉE
-                it["color"] = color or "Blanc"
+                it["color"] = color or "Blanc (standard NumWorks)"
                 it["upload_time"] = upload_time or "À l'instant"
                 log.info(f"🔥 NOUVELLE NUMWORKS VALIDE : {it['title']} à {it['price']} ({it['upload_time']}) !")
                 send_discord(it)
