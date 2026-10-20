@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+import threading
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 from dotenv import load_dotenv
@@ -164,8 +165,8 @@ def is_strictly_white(color_str: str) -> bool:
     return c in ("blanc", "white")
 
 
-# ─── Envoi Discord instantané ────────────────────────────────────
-def send_discord(item_data: dict):
+# ─── Envoi Discord instantané (Non-bloquant) ────────────────────
+def _send_discord_worker(item_data: dict):
     if not WEBHOOK_URL:
         log.info(f"[SIMULATION] {item_data['title']} — {item_data['price']} -> {item_data['url']}")
         return
@@ -209,17 +210,28 @@ def send_discord(item_data: dict):
         log.error(f"❌ Erreur envoi Webhook: {e}")
 
 
+def send_discord(item_data: dict):
+    """Envoi non-bloquant en tâche de fond pour libérer immédiatement la boucle de scan (gain ~370ms)."""
+    t = threading.Thread(target=_send_discord_worker, args=(item_data,), daemon=True)
+    t.start()
+
+
 _last_rate_limit_alert = 0
 
 
-def send_discord_status(message: str):
-    """Envoie une notification d'état rapide sur Discord."""
+def _send_discord_status_worker(message: str):
     if not WEBHOOK_URL:
         return
     try:
         cffi_requests.post(WEBHOOK_URL, json={"content": message}, timeout=10)
     except Exception as e:
         log.warning(f"Erreur status Discord: {e}")
+
+
+def send_discord_status(message: str):
+    """Envoi de statut non-bloquant en tâche de fond."""
+    t = threading.Thread(target=_send_discord_status_worker, args=(message,), daemon=True)
+    t.start()
 
 
 # ─── Scraping du flux Vinted ─────────────────────────────────────

@@ -24,17 +24,21 @@ jobs:
       matrix:
         include:
           - worker_id: 1
-            offset: 0.0
+            offset: 0.00
           - worker_id: 2
-            offset: 0.30
+            offset: 0.22
           - worker_id: 3
-            offset: 0.60
+            offset: 0.45
           - worker_id: 4
-            offset: 0.90
+            offset: 0.67
           - worker_id: 5
-            offset: 1.20
+            offset: 0.90
           - worker_id: 6
-            offset: 1.50
+            offset: 1.12
+          - worker_id: 7
+            offset: 1.35
+          - worker_id: 8
+            offset: 1.57
 
     steps:
       - name: Checkout repository
@@ -68,7 +72,7 @@ jobs:
           DISCORD_MENTION: "@everyone"
           SEEN_FILE: "seen_ids.json"
           WORKER_ID: ${{ matrix.worker_id }}
-          WORKER_COUNT: "6"
+          WORKER_COUNT: "8"
           START_OFFSET: ${{ matrix.offset }}
         run: |
           python3 vinted_numworks_discord.py
