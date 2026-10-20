@@ -24,7 +24,7 @@ load_dotenv()
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 SEARCH_TEXT = os.getenv("SEARCH_TEXT", "numworks").strip()
 PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
-PRICE_MAX = int(os.getenv("MAX_PRICE", 35))
+PRICE_MAX = int(os.getenv("MAX_PRICE", 40))
 POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", 2.0))  # Scan optimisé toutes les 2s (évite 429)
 MAX_AGE_MINUTES = int(os.getenv("MAX_AGE_MINUTES", 10))  # Max 10 minutes
 RUN_DURATION_HOURS = float(os.getenv("RUN_DURATION_HOURS", 4.8))  # Rotation propre avant limite GitHub
@@ -321,10 +321,17 @@ def run_sniper():
     last_status_ping = time.time()
     scan_count = 0
 
-    # 1. Mémorisation de l'existant au premier scan
+    # 1. Mémorisation de l'existant au premier scan (avec alerte si annonce fraîche < 10 mins)
     log.info("📦 Mémorisation des annonces actuellement en ligne...")
     initial_items = fetch_catalog_items(session=session)
     for it in initial_items:
+        if it["id"] not in seen:
+            color, upload_time = parse_item_details(it["url"], session=session)
+            if upload_time and is_fresh(upload_time, MAX_AGE_MINUTES) and (not color or is_strictly_white(color)):
+                log.info(f"🔥 NOUVELLE NUMWORKS VALIDE AU DÉMARRAGE : {it['title']} à {it['price']} ({upload_time}) !")
+                it["color"] = color or "Blanc"
+                it["upload_time"] = upload_time
+                send_discord(it)
         seen.add(it["id"])
     save_seen(seen)
     log.info(f"✅ {len(initial_items)} annonces déjà en ligne mémorisées (aucune alerte pour l'ancien).")
