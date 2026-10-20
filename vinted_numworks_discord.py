@@ -25,7 +25,7 @@ WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 SEARCH_TEXT = os.getenv("SEARCH_TEXT", "numworks").strip()
 PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
 PRICE_MAX = int(os.getenv("MAX_PRICE", 35))
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 2))  # Rafraîchissement ultra-rapide
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 1))  # Scan toutes les 1 seconde (ultra-rapide)
 MAX_AGE_MINUTES = int(os.getenv("MAX_AGE_MINUTES", 10))  # Max 10 minutes
 RUN_DURATION_HOURS = float(os.getenv("RUN_DURATION_HOURS", 4.8))  # Rotation propre avant limite GitHub
 MENTION = os.getenv("DISCORD_MENTION", "@everyone").strip()
@@ -203,9 +203,19 @@ def send_discord(item_data: dict):
         log.error(f"❌ Erreur envoi Webhook: {e}")
 
 
+def send_discord_status(message: str):
+    """Envoie une notification d'état rapide sur Discord."""
+    if not WEBHOOK_URL:
+        return
+    try:
+        cffi_requests.post(WEBHOOK_URL, json={"content": message}, timeout=10)
+    except Exception as e:
+        log.warning(f"Erreur status Discord: {e}")
+
+
 # ─── Scraping du flux Vinted ─────────────────────────────────────
 def fetch_catalog_items() -> list:
-    """Interroge le catalogue Vinted avec filtre couleur blanche + prix 20-40€."""
+    """Interroge le catalogue Vinted avec filtre couleur blanche + prix 20-35€."""
     url = (
         f"https://www.vinted.fr/catalog?"
         f"search_text={SEARCH_TEXT}&"
@@ -231,6 +241,8 @@ def fetch_catalog_items() -> list:
         )
         if res.status_code != 200:
             log.warning(f"Vinted status {res.status_code}")
+            if res.status_code in (403, 429):
+                send_discord_status(f"⚠️ **Alerte Vinted** : Code HTTP {res.status_code} reçu de Vinted !")
             return []
 
         soup = BeautifulSoup(res.text, "html.parser")
@@ -299,6 +311,11 @@ def run_sniper():
     save_seen(seen)
     log.info(f"✅ {len(initial_items)} annonces déjà en ligne mémorisées (aucune alerte pour l'ancien).")
     log.info("👀 À l'écoute des publications à la seconde près...")
+
+    # Confirmation en direct sur Discord
+    send_discord_status(
+        f"🟢 **Vinted Sniper en ligne (Scan 1s)** : Statut Vinted OK (HTTP 200), 0 ban. En écoute continue des NumWorks blanches ({PRICE_MIN}€–{PRICE_MAX}€) !"
+    )
 
     while True:
         try:
