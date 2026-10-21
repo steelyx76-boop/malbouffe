@@ -70,6 +70,7 @@ jobs:
 
       - name: Run data sync worker
         env:
+          PYTHONUNBUFFERED: "1"
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           NTFY_TOPIC: "numworks"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

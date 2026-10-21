@@ -34,12 +34,27 @@ WORKER_ID = int(os.getenv("WORKER_ID", 1))
 WORKER_COUNT = int(os.getenv("WORKER_COUNT", 1))
 START_OFFSET = float(os.getenv("START_OFFSET", 0.0))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
+# Forcer la désactivation de la mise en tampon pour affichage instantané des logs
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+
+class FlushStreamHandler(logging.StreamHandler):
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
+_handler = FlushStreamHandler(sys.stdout)
+_handler.setFormatter(logging.Formatter(
+    f"%(asctime)s [%(levelname)s] [Worker #{WORKER_ID}] %(message)s",
+    datefmt="%H:%M:%S"
+))
+
 log = logging.getLogger("worker")
+log.setLevel(logging.INFO)
+log.handlers = [_handler]
+log.propagate = False
 
 
 # ─── Verrou distribué anti-doublon multi-workers ─────────────────
@@ -532,10 +547,10 @@ def run_sniper():
 
             current_items = fetch_catalog_items(session=session)
 
-            # Log interne régulier (toutes les ~1 minute = 30 scans)
-            if scan_count % 30 == 0:
+            # Log régulier (Scan #1 immédiatement au lancement, puis toutes les ~36s = 20 scans)
+            if scan_count == 1 or scan_count % 20 == 0:
                 log.info(
-                    f"🛰️ [LOG INTERNE] Scan #{scan_count} OK (HTTP 200) | {len(current_items)} annonce(s) en ligne | 0 erreur | En écoute..."
+                    f"🛰️ [LOG ACTIF] Scan #{scan_count} OK (HTTP 200) | {len(current_items)} annonces analysées | 0 erreur | En écoute continue..."
                 )
 
             for it in reversed(current_items):
