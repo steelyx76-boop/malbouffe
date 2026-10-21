@@ -146,7 +146,7 @@ def is_valid_title(title: str) -> bool:
     excludes = [
         "coque seule", "housse seule", "câble seul", "chargeur seul",
         "boite vide", "etui seul", "étui seul", "protection seule",
-        "silicone", "cable seul"
+        "silicone", "cable seul", "noir", "noire", "black"
     ]
     for ex in excludes:
         if ex in t:
