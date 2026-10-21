@@ -13,6 +13,7 @@ import logging
 import re
 from datetime import datetime, timezone
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from vinted_scraper import VintedWrapper
 from curl_cffi import requests as cffi_requests
 from dotenv import load_dotenv
@@ -25,7 +26,7 @@ NTFY_TOPIC = os.getenv("NTFY_TOPIC", "numworks").strip()
 SEARCH_TEXT = os.getenv("SEARCH_TEXT", "numworks").strip()
 PRICE_MIN = int(os.getenv("MIN_PRICE", 20))
 PRICE_MAX = int(os.getenv("MAX_PRICE", 40))
-POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", 1.2))  # Réduit grâce à l'API rapide (évite 429)
+POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", 1.0))  # 1.0s par worker (cadence cluster 12x ~80ms)
 MAX_AGE_MINUTES = int(os.getenv("MAX_AGE_MINUTES", 10))  # Max 10 minutes
 RUN_DURATION_HOURS = float(os.getenv("RUN_DURATION_HOURS", 4.8))  # Rotation propre avant limite GitHub
 MENTION = os.getenv("DISCORD_MENTION", "@everyone").strip()
@@ -67,7 +68,7 @@ def get_github_lock_session():
     if _github_lock_session is None:
         token = os.getenv("GITHUB_TOKEN", "").strip()
         if token:
-            _github_lock_session = cffi_requests.Session()
+            _github_lock_session = cffi_requests.Session(impersonate="chrome124")
             _github_lock_session.headers.update({
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
@@ -187,6 +188,7 @@ def is_fresh(upload_str: str, max_minutes: int = 10) -> bool:
 _ntfy_session = None
 _discord_session = None
 _vinted_wrapper = None
+_alert_executor = ThreadPoolExecutor(max_workers=4)
 
 def get_ntfy_session():
     global _ntfy_session
@@ -208,8 +210,8 @@ def get_vinted_wrapper() -> VintedWrapper:
     return _vinted_wrapper
 
 def warmup_connections():
-    """Pré-établit les connexions TCP/TLS avec ntfy, Discord et Vinted au démarrage."""
-    # Pré-chauffe Vinted API (session cookie + TLS)
+    """Pré-établit les connexions TCP/TLS avec ntfy, Discord, GitHub Lock et Vinted au démarrage."""
+    # 1. Pré-chauffe Vinted API (session cookie + TLS)
     try:
         v = get_vinted_wrapper()
         _ = v.search(params={"search_text": SEARCH_TEXT, "per_page": 1, "order": "newest_first"})
@@ -217,17 +219,32 @@ def warmup_connections():
     except Exception:
         pass
 
+    # 2. Pré-chauffe ntfy.sh (endpoint de santé officiel HTTP 200)
     try:
         s_ntfy = get_ntfy_session()
-        s_ntfy.get("https://ntfy.sh/static/images/logo.png", timeout=5)
-        log.info("⚡ Connexion ntfy.sh pré-établie et pré-chauffée (0ms TLS delay).")
+        r_ntfy = s_ntfy.get("https://ntfy.sh/v1/health", timeout=5)
+        if r_ntfy.status_code == 200:
+            log.info("⚡ Connexion ntfy.sh pré-établie et pré-chauffée (0ms TLS delay).")
     except Exception:
         pass
 
+    # 3. Pré-chauffe GitHub Lock HTTP/2 multiplexé (réduit le premier lock de 235ms à 24ms)
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if token:
+        try:
+            s_gh = get_github_lock_session()
+            if s_gh:
+                r_gh = s_gh.get("https://api.github.com/zen", timeout=5)
+                if r_gh.status_code == 200:
+                    log.info("⚡ Session GitHub Lock HTTP/2 pré-chauffée (24ms latency).")
+        except Exception:
+            pass
+
+    # 4. Pré-chauffe Discord Webhook API
     if WEBHOOK_URL:
         try:
             s_disc = get_discord_session()
-            s_disc.get("https://discord.com", timeout=5)
+            s_disc.get("https://discord.com/api/v10/gateway", timeout=5)
             log.info("⚡ Connexion Discord pré-établie et pré-chauffée (0ms TLS delay).")
         except Exception:
             pass
@@ -280,9 +297,8 @@ def _send_discord_worker(item_data: dict):
 
 
 def send_discord(item_data: dict):
-    """Envoi non-bloquant en tâche de fond pour libérer immédiatement la boucle de scan (gain ~370ms)."""
-    t = threading.Thread(target=_send_discord_worker, args=(item_data,), daemon=True)
-    t.start()
+    """Envoi non-bloquant via ThreadPool statique pour libérer instantanément la boucle de scan."""
+    _alert_executor.submit(_send_discord_worker, item_data)
 
 
 # ─── Envoi ntfy.sh instantané (Téléphone - Priorité Maximale) ─────
@@ -309,6 +325,10 @@ def _send_ntfy_worker(item_data: dict):
         ],
     }
 
+    # Intègre la photo directement dans la bannière de notification mobile
+    if item_data.get("image_url"):
+        payload["icon"] = item_data["image_url"]
+
     try:
         session = get_ntfy_session()
         r = session.post("https://ntfy.sh", json=payload, timeout=6)
@@ -321,9 +341,8 @@ def _send_ntfy_worker(item_data: dict):
 
 
 def send_ntfy(item_data: dict):
-    """Envoi non-bloquant sur ntfy.sh en tâche de fond."""
-    t = threading.Thread(target=_send_ntfy_worker, args=(item_data,), daemon=True)
-    t.start()
+    """Envoi non-bloquant via ThreadPool statique (0.1ms dispatch)."""
+    _alert_executor.submit(_send_ntfy_worker, item_data)
 
 
 def notify_all(item_data: dict):
@@ -350,8 +369,7 @@ def _send_discord_status_worker(message: str):
 
 def send_discord_status(message: str):
     """Envoi de statut non-bloquant en tâche de fond."""
-    t = threading.Thread(target=_send_discord_status_worker, args=(message,), daemon=True)
-    t.start()
+    _alert_executor.submit(_send_discord_status_worker, message)
 
 
 # ─── Fetch catalogue via API JSON directe (svc-catalogue) ────────
