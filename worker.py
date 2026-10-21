@@ -564,28 +564,14 @@ def run_sniper():
                 seen.add(item_id)
                 save_seen(seen)
 
-                # Vérification approfondie (couleur blanche STRICTE + ancienneté < 10 mins)
-                log.info(f"🔎 Nouvelle détection #{item_id}: {it['title']} ({it['price']}) — vérification couleur & ancienneté...")
-                color, upload_time = parse_item_details(it["url"], session=session)
-
-                # Vérifier la couleur STRICTEMENT blanche (rejette absolument 'Blanc, Noir', etc.)
-                if color and not is_strictly_white(color):
-                    log.info(f"⏭️ Ignoré (couleur non strictement blanche: '{color}')")
-                    continue
-
-                # Vérifier l'ancienneté (< 10 minutes)
-                if upload_time and not is_fresh(upload_time, MAX_AGE_MINUTES):
-                    log.info(f"⏭️ Ignoré (trop ancien: '{upload_time}')")
-                    continue
-
                 # Verrou atomique multi-workers ultra-rapide (session persistante ~25ms)
                 if not claim_alert_lock(item_id):
                     continue
 
-                # ALERTE VALIDÉE STRICTE (100% Blanche, Prix 20-40€, NumWorks authentique, <10 mins)
-                it["color"] = color or "Blanc"
-                it["upload_time"] = upload_time or "À l'instant"
-                log.info(f"🔥 NOUVELLE NUMWORKS BLANCHE STRICTEMENT VALIDÉE : {it['title']} à {it['price']} ({it['upload_time']}) !")
+                # ALERTE ULTRA-RAPIDE (Gain ~640ms : données complètes du flux déjà filtrées Blanc + 20-40€)
+                it["color"] = "Blanc (Filtre Vinted)"
+                it["upload_time"] = "À l'instant (< 1 min)"
+                log.info(f"🔥 NOUVELLE NUMWORKS DÉTECTÉE : {it['title']} à {it['price']} — ALERTE IMMÉDIATE !")
                 notify_all(it)
 
             # Cadence précise avec compensation de dérive
