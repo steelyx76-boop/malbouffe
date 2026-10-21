@@ -173,6 +173,7 @@ def parse_item_details(item_url: str, session=None):
                 timeout=6
             )
         if r.status_code != 200:
+            log.warning(f"⚠️ [VINTED DÉTAIL ANORMAL] Code HTTP {r.status_code} sur l'annonce {item_url}")
             return None, None
 
         soup = BeautifulSoup(r.text, "html.parser")
@@ -423,10 +424,12 @@ def fetch_catalog_items(session=None) -> list:
                 timeout=8
             )
         if res.status_code != 200:
-            log.warning(f"Vinted status {res.status_code}")
+            log.warning(f"⚠️ [VINTED RÉPONSE ANORMALE] Code HTTP {res.status_code} sur le flux catalogue (taille: {len(res.content)} bytes)")
             if res.status_code == 429:
-                log.warning("Rate limit 429 détecté. Pause silencieuse de 20s pour temporisation...")
+                log.warning("🛑 [RATE LIMIT 429] Pause de temporisation de 20s sur ce worker...")
                 time.sleep(20)
+            elif res.status_code in (403, 422, 500, 502, 503):
+                log.warning(f"⚠️ [VINTED ERREUR {res.status_code}] Extrait réponse: {res.text[:150]}")
             return []
 
         soup = BeautifulSoup(res.text, "html.parser")
