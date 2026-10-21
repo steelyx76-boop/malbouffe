@@ -1,0 +1,90 @@
+name: Data Sync Pipeline (24/7)
+
+on:
+  schedule:
+    # Filet de sécurité cron toutes les 4 heures
+    - cron: '0 */4 * * *'
+  workflow_dispatch: # Déclencheur manuel
+
+# Empêche strictement d'avoir plusieurs workflows qui tournent en même temps
+concurrency:
+  group: data-sync-group
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 320 # ~5h15 max par session avant auto-relais
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - worker_id: 1
+            offset: 0.00
+          - worker_id: 2
+            offset: 0.22
+          - worker_id: 3
+            offset: 0.45
+          - worker_id: 4
+            offset: 0.67
+          - worker_id: 5
+            offset: 0.90
+          - worker_id: 6
+            offset: 1.12
+          - worker_id: 7
+            offset: 1.35
+          - worker_id: 8
+            offset: 1.57
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore seen items cache
+        uses: actions/cache@v4
+        with:
+          path: seen_ids.json
+          key: seen-ids-${{ github.run_id }}-${{ matrix.worker_id }}
+          restore-keys: |
+            seen-ids-
+
+      - name: Run data sync worker
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          NTFY_TOPIC: "numworks"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          SEARCH_TEXT: "numworks"
+          MIN_PRICE: "20"
+          MAX_PRICE: "40"
+          POLL_INTERVAL: "1.8"
+          MAX_AGE_MINUTES: "10"
+          RUN_DURATION_HOURS: "4.8"
+          DISCORD_MENTION: "@everyone"
+          SEEN_FILE: "seen_ids.json"
+          WORKER_ID: ${{ matrix.worker_id }}
+          WORKER_COUNT: "8"
+          START_OFFSET: ${{ matrix.offset }}
+        run: |
+          python3 worker.py
+
+      - name: Auto-relay to next run (Infinite 24/7 loop)
+        if: always() && matrix.worker_id == 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔄 Relance automatique du prochain run pour continuité 24h/24 7j/7..."
+          gh workflow run monitor.yml --repo ${{ github.repository }}

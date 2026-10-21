@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+seen_ids.json
+seen_lbc_ids.json
+seen_items.json
+vinted.log
