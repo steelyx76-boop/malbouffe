@@ -26,19 +26,27 @@ jobs:
           - worker_id: 1
             offset: 0.00
           - worker_id: 2
-            offset: 0.22
+            offset: 0.15
           - worker_id: 3
-            offset: 0.45
+            offset: 0.30
           - worker_id: 4
-            offset: 0.67
+            offset: 0.45
           - worker_id: 5
-            offset: 0.90
+            offset: 0.60
           - worker_id: 6
-            offset: 1.12
+            offset: 0.75
           - worker_id: 7
-            offset: 1.35
+            offset: 0.90
           - worker_id: 8
-            offset: 1.57
+            offset: 1.05
+          - worker_id: 9
+            offset: 1.20
+          - worker_id: 10
+            offset: 1.35
+          - worker_id: 11
+            offset: 1.50
+          - worker_id: 12
+            offset: 1.65
 
     steps:
       - name: Checkout repository
@@ -76,7 +84,7 @@ jobs:
           DISCORD_MENTION: "@everyone"
           SEEN_FILE: "seen_ids.json"
           WORKER_ID: ${{ matrix.worker_id }}
-          WORKER_COUNT: "8"
+          WORKER_COUNT: "12"
           START_OFFSET: ${{ matrix.offset }}
         run: |
           python3 worker.py
